@@ -1,0 +1,3 @@
+Model,EFL_Total,FN_Cost_Lost_CLV,FP_Cost_Unnecessary_Intervention,TP_Intervention_Cost,N_False_Negatives,N_False_Positives,N_True_Positives,Mean_CLV_Missed_Churners,PV_Annuity_Factor
+Monolithic Baseline,48838.490076665585,46288.490076665585,500.0,2050.0,20,10,41,2314.4245038332792,2.7232480293704784
+HEL Framework,54481.32765360112,52131.32765360112,450.0,1900.0,23,9,38,2266.5794632000484,2.7232480293704784
