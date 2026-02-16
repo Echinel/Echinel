@@ -12,31 +12,31 @@ A two-stage Hierarchical Ensemble Learning framework that integrates value-based
 
 ```
 Banking Customer Dataset (1,000 customers, 5 tables)
-                    │
-        ┌───────────┴───────────┐
-        │  STAGE 1: Value-Based │
-        │  Segmentation (Median │
-        │  Split on TMV)        │
-        └───────────┬───────────┘
-              ┌─────┴─────┐
-              ▼           ▼
-     ┌──────────────┐ ┌──────────────┐
-     │  High-Value  │ │  Low-Value   │
-     │  Segment     │ │  Segment     │
-     └──────┬───────┘ └──────┬───────┘
-            ▼                ▼
-     ┌──────────────┐ ┌──────────────┐
-     │ SMOTE +      │ │ SMOTE +      │
-     │ XGBoost      │ │ XGBoost      │
-     │ (Grid Search)│ │ (Grid Search)│
-     └──────┬───────┘ └──────┬───────┘
-            └─────┬──────────┘
-                  ▼
-     ┌────────────────────────┐
-     │ Combined Predictions   │
-     │ + SHAP Interpretability│
-     │ + Financial Assessment │
-     └────────────────────────┘
+                    |
+        +-----------+-----------+
+        |  STAGE 1: Value-Based |
+        |  Segmentation (Median |
+        |  Split on TMV)        |
+        +-----------+-----------+
+              +-----+-----+
+              v           v
+     +--------------+ +--------------+
+     |  High-Value  | |  Low-Value   |
+     |  Segment     | |  Segment     |
+     +------+-------+ +------+-------+
+            v                v
+     +--------------+ +--------------+
+     | SMOTE +      | | SMOTE +      |
+     | XGBoost      | | XGBoost      |
+     | (Grid Search)| | (Grid Search)|
+     +------+-------+ +------+-------+
+            +-----+----------+
+                  v
+     +------------------------+
+     | Combined Predictions   |
+     | + SHAP Interpretability|
+     | + Financial Assessment |
+     +------------------------+
 ```
 
 ## Project Structure
@@ -45,49 +45,66 @@ Banking Customer Dataset (1,000 customers, 5 tables)
 ├── main.py                       # Main pipeline orchestrator
 ├── requirements.txt              # Python dependencies
 ├── src/
-│   ├── data_generation.py        # Synthetic data matching Lloyds/Forage statistics
+│   ├── data_generation.py        # Synthetic data generator (fallback)
 │   ├── feature_engineering.py    # Feature groups, encoding, value segmentation
 │   ├── models.py                 # Monolithic baseline + HEL framework
 │   ├── evaluation.py             # Metrics, McNemar's test, bootstrap CIs, EFL
 │   ├── shap_analysis.py          # Global + per-segment SHAP analysis
 │   └── visualisations.py         # All dissertation figures (300 DPI)
 ├── data/
-│   └── Customer_Churn_Data_Large.xlsx
+│   └── Customer_Churn_Data_Large.xlsx   # Forage dataset
 ├── figures/                      # Generated figures (16 PNGs)
-└── outputs/                      # Result tables (11 CSVs)
+└── outputs/                      # Result tables (12 CSVs)
 ```
 
 ## Dataset
 
-Based on the Lloyds Banking Group Job Simulation Task from the [Forage platform](https://www.theforage.com/). The dataset comprises 1,000 customer records across five interrelated tables:
+Source: **Lloyds Banking Group Job Simulation Task** from the [Forage education platform](https://www.theforage.com/).
+
+The dataset comprises 1,000 customer records across five interrelated tables:
 
 | Component | Records | Key Variables |
 |-----------|---------|---------------|
-| Customer Demographics | 1,000 | Age, Gender, Marital Status, Income Level |
-| Transaction History | 5,054 | Amount, Frequency, Category |
-| Customer Service | 1,002 | Interaction Type, Resolution Status |
-| Online Activity | 1,000 | Login Frequency, Service Channel |
-| Churn Status | 1,000 | Binary: Churned (20.4%) vs Retained (79.6%) |
+| Customer Demographics | 1,000 | Age (M=43.3, SD=15.2), Gender (51.3% F), Marital Status, Income Level |
+| Transaction History | 5,054 | Amount (M=£250.71), Transaction ID, Date, Product Category |
+| Customer Service | 1,002 | Interaction Type (33.4% Complaints), Resolution Status (47.8% Unresolved) |
+| Online Activity | 1,000 | Login Frequency (M=25.9), Last Login Date, Service Usage |
+| Churn Status | 1,000 | Binary: Churned n=204 (20.4%) vs Retained n=796 (79.6%) |
+
+The pipeline automatically handles the Forage column naming conventions (CamelCase) by standardising them to the internal schema (e.g., `AmountSpent` -> `Transaction_Amount`, `LastLoginDate` -> derived `Days_Since_Last_Login`).
 
 ## Methodology
 
-### Feature Engineering (3 groups)
+### Feature Engineering (3 groups, 22 encoded features)
 1. **Transactional**: Transaction Frequency, Total Monetary Value, Average Transaction Value, Category Diversity
 2. **Service Interaction**: Complaint Count, Unresolved Complaint Ratio, Total Interactions
 3. **Digital Engagement**: Login Frequency, Days Since Last Login
 
-### Model Training
+Categorical variables are one-hot encoded; continuous variables are z-score normalised.
+
+### Value-Based Segmentation (HEL Stage 1)
+- Median split on Total Monetary Value (median = £1,232.88)
+- High-value segment: customers above median
+- Low-value segment: customers below median
+
+### Model Training (HEL Stage 2)
 - **SMOTE** (k=5) for class imbalance handling
-- **5-fold stratified cross-validation** grid search over max_depth, learning_rate, n_estimators, reg_lambda
+- **5-fold stratified cross-validation** grid search over:
+  - `max_depth`: [3, 5, 7, 10]
+  - `learning_rate`: [0.01, 0.05, 0.1, 0.3]
+  - `n_estimators`: [100, 200, 300, 500]
+  - `reg_lambda`: [0.1, 0.5, 1.0]
 - **70:30 stratified train-test split**
 
 ### Evaluation
-- Classification: Accuracy, Precision, Recall, F1-Score, AUC-ROC, AUC-PR
-- Threshold optimisation: Youden's J-statistic
-- Statistical testing: McNemar's test with Cohen's h effect size
-- Confidence intervals: 1,000 bootstrap repetitions at 95% CI
-- Financial: Expected Financial Loss (CLV-based FN costs + intervention costs)
-- Interpretability: SHAP TreeExplainer (global and per-segment)
+- **Classification**: Accuracy, Precision, Recall, F1-Score, AUC-ROC, AUC-PR
+- **Threshold optimisation**: Youden's J-statistic (J = Sensitivity + Specificity - 1)
+- **Statistical testing**: McNemar's test with Cohen's h effect size
+- **Confidence intervals**: 1,000 bootstrap repetitions at 95% CI
+- **Financial**: Expected Financial Loss: EFL = Sum(FN x CLV_i) + Sum(FP x Intervention_Cost)
+  - CLV calculated using 3-year retention period with 5% discount rate
+  - Intervention cost: £50 per customer
+- **Interpretability**: SHAP TreeExplainer (global and per-segment)
 
 ## Quick Start
 
@@ -99,13 +116,7 @@ pip install -r requirements.txt
 python main.py
 ```
 
-### Using the Real Forage Dataset
-
-The pipeline auto-detects the data format. To use the real data:
-
-1. Download the Excel file from the [Forage platform](https://cdn.theforage.com/vinternships/companyassets/Zbnc2o4ok6kD2NEXx/2kCX23cgKgCumeEam/1721851467492/Customer_Churn_Data_Large.xlsx)
-2. Place it at `data/Customer_Churn_Data_Large.xlsx` (replacing the existing file)
-3. Run `python main.py`
+The pipeline auto-detects whether the Excel file contains the real Forage data (CamelCase columns) or the internally generated format, and handles both transparently.
 
 ## Generated Outputs
 
@@ -135,9 +146,13 @@ The pipeline auto-detects the data format. To use the real data:
 | `bootstrap_confidence_intervals.csv` | 95% CIs for all metrics |
 | `statistical_tests.csv` | McNemar's test results |
 | `financial_impact.csv` | EFL breakdown per model |
-| `engineered_features.csv` | Complete feature matrix |
-| `cv_results_*.csv` | Cross-validation results per model |
-| `shap_importance_*.csv` | SHAP feature rankings per segment |
+| `engineered_features.csv` | Complete feature matrix (1,000 x 15) |
+| `cv_results_monolithic.csv` | Cross-validation results: monolithic baseline |
+| `cv_results_high_value.csv` | Cross-validation results: high-value segment |
+| `cv_results_low_value.csv` | Cross-validation results: low-value segment |
+| `shap_importance_monolithic.csv` | SHAP feature rankings: global |
+| `shap_importance_high_value.csv` | SHAP feature rankings: high-value segment |
+| `shap_importance_low_value.csv` | SHAP feature rankings: low-value segment |
 
 ## Technologies
 
