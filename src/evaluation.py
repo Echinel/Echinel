@@ -175,8 +175,9 @@ def expected_financial_loss(y_true, y_pred, total_monetary_values,
     tp_mask = (y_true_arr == 1) & (y_pred_arr == 1)
     tp_intervention_cost = np.sum(tp_mask) * intervention_cost
 
-    # Total EFL
-    efl = fn_cost + fp_cost + tp_intervention_cost
+    # Total EFL: EFL = Σ(FN × CLV_i) + Σ(FP × Intervention_Cost)
+    # Per Section 3.6, only FN and FP costs are included
+    efl = fn_cost + fp_cost
 
     # Detailed breakdown
     results = {

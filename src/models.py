@@ -46,7 +46,6 @@ def build_pipeline(random_state=42):
     pipeline = ImbPipeline([
         ("smote", SMOTE(k_neighbors=5, random_state=random_state)),
         ("classifier", XGBClassifier(
-            use_label_encoder=False,
             eval_metric="logloss",
             random_state=random_state,
             n_jobs=-1
@@ -65,7 +64,7 @@ def grid_search_cv(X_train, y_train, param_grid=None, cv_folds=5,
         cv_results: DataFrame of cross-validation results
     """
     if param_grid is None:
-        param_grid = PARAM_GRID_REDUCED
+        param_grid = PARAM_GRID
 
     pipeline = build_pipeline(random_state)
     cv = StratifiedKFold(n_splits=cv_folds, shuffle=True,
