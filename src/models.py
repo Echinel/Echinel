@@ -12,14 +12,21 @@ Hyperparameter search space:
 - reg_lambda (L2): [0.1, 0.5, 1.0]
 
 SMOTE k_neighbors=5 (Chawla et al. default, confirmed by Elreedy & Atiya).
+
+Grid-search scoring uses AUC-ROC. Threshold-free ranking quality is more
+reliable than F1 on weakly-separable, imbalanced problems (Saito &
+Rehmsmeier, 2015). Final classification thresholds are selected
+post-hoc using Youden's J on cross-validated training predictions,
+avoiding test-set leakage.
 """
 
 import numpy as np
 import pandas as pd
 from xgboost import XGBClassifier
 from sklearn.model_selection import (
-    StratifiedKFold, GridSearchCV, train_test_split
+    StratifiedKFold, GridSearchCV, train_test_split, cross_val_predict
 )
+from sklearn.metrics import roc_curve
 from imblearn.over_sampling import SMOTE
 from imblearn.pipeline import Pipeline as ImbPipeline
 
@@ -46,7 +53,6 @@ def build_pipeline(random_state=42):
     pipeline = ImbPipeline([
         ("smote", SMOTE(k_neighbors=5, random_state=random_state)),
         ("classifier", XGBClassifier(
-            use_label_encoder=False,
             eval_metric="logloss",
             random_state=random_state,
             n_jobs=-1
@@ -56,16 +62,19 @@ def build_pipeline(random_state=42):
 
 
 def grid_search_cv(X_train, y_train, param_grid=None, cv_folds=5,
-                   scoring="f1", random_state=42, verbose=1):
+                   scoring="roc_auc", random_state=42, verbose=1):
     """
     5-fold stratified cross-validation grid search (Section 3.4).
+
+    Scoring defaults to roc_auc: threshold-independent ranking quality
+    is more reliable than F1 for weakly-separable, imbalanced problems.
 
     Returns:
         best_pipeline: fitted pipeline with best hyperparameters
         cv_results: DataFrame of cross-validation results
     """
     if param_grid is None:
-        param_grid = PARAM_GRID_REDUCED
+        param_grid = PARAM_GRID
 
     pipeline = build_pipeline(random_state)
     cv = StratifiedKFold(n_splits=cv_folds, shuffle=True,
@@ -89,6 +98,25 @@ def grid_search_cv(X_train, y_train, param_grid=None, cv_folds=5,
     return grid_search.best_estimator_, pd.DataFrame(grid_search.cv_results_)
 
 
+def find_optimal_threshold(model, X_train, y_train, cv_folds=5,
+                           random_state=42):
+    """
+    Find optimal classification threshold via Youden's J on
+    cross-validated training predictions. This avoids data leakage
+    from selecting a threshold on the test set.
+    """
+    cv = StratifiedKFold(n_splits=cv_folds, shuffle=True,
+                         random_state=random_state)
+    cv_proba = cross_val_predict(
+        model, X_train, y_train, cv=cv,
+        method="predict_proba", n_jobs=-1
+    )[:, 1]
+    fpr, tpr, thresholds = roc_curve(y_train, cv_proba)
+    j_scores = tpr - fpr
+    best_idx = np.argmax(j_scores)
+    return float(thresholds[best_idx]), float(j_scores[best_idx])
+
+
 def train_monolithic_baseline(X_train, y_train, random_state=42, verbose=1):
     """
     Train monolithic XGBoost baseline model (single model on all data).
@@ -96,6 +124,7 @@ def train_monolithic_baseline(X_train, y_train, random_state=42, verbose=1):
     Returns:
         model: fitted pipeline
         cv_results: cross-validation results
+        threshold: Youden's J optimal threshold selected from CV
     """
     print("=" * 60)
     print("MONOLITHIC BASELINE MODEL")
@@ -107,7 +136,12 @@ def train_monolithic_baseline(X_train, y_train, random_state=42, verbose=1):
         X_train, y_train, random_state=random_state, verbose=verbose
     )
 
-    return model, cv_results
+    threshold, j_stat = find_optimal_threshold(
+        model, X_train, y_train, random_state=random_state
+    )
+    print(f"  CV Youden's J threshold: {threshold:.4f} (J={j_stat:.4f})")
+
+    return model, cv_results, threshold
 
 
 def train_hel_framework(X_train, y_train, segments_train, random_state=42,
@@ -121,6 +155,7 @@ def train_hel_framework(X_train, y_train, segments_train, random_state=42,
     Returns:
         segment_models: dict of {segment_name: fitted_pipeline}
         segment_cv_results: dict of {segment_name: cv_results}
+        segment_thresholds: dict of {segment_name: Youden's J threshold}
     """
     print("=" * 60)
     print("HIERARCHICAL ENSEMBLE LEARNING (HEL) FRAMEWORK")
@@ -128,6 +163,7 @@ def train_hel_framework(X_train, y_train, segments_train, random_state=42,
 
     segment_models = {}
     segment_cv_results = {}
+    segment_thresholds = {}
 
     for seg_name, seg_data in segments_train.items():
         X_seg = seg_data["X"]
@@ -141,25 +177,31 @@ def train_hel_framework(X_train, y_train, segments_train, random_state=42,
             X_seg, y_seg, random_state=random_state, verbose=verbose
         )
 
+        threshold, j_stat = find_optimal_threshold(
+            model, X_seg, y_seg, random_state=random_state
+        )
+        print(f"  CV Youden's J threshold: {threshold:.4f} (J={j_stat:.4f})")
+
         segment_models[seg_name] = model
         segment_cv_results[seg_name] = cv_results
+        segment_thresholds[seg_name] = threshold
 
-    return segment_models, segment_cv_results
+    return segment_models, segment_cv_results, segment_thresholds
 
 
-def predict_hel(segment_models, X_test, test_segment_indices):
+def predict_with_threshold(model, X, threshold=0.5):
+    """Predict with a custom classification threshold."""
+    proba = model.predict_proba(X)[:, 1]
+    pred = (proba >= threshold).astype(int)
+    return pred, proba
+
+
+def predict_hel(segment_models, X_test, test_segment_indices,
+                segment_thresholds=None):
     """
     Generate HEL predictions by routing test samples to appropriate
-    segment-specific models.
-
-    Args:
-        segment_models: dict of {segment_name: fitted_pipeline}
-        X_test: full test feature matrix
-        test_segment_indices: dict of {segment_name: array of indices into X_test}
-
-    Returns:
-        y_pred: combined predictions
-        y_proba: combined probability scores
+    segment-specific models. Uses segment-specific thresholds if
+    provided, otherwise default 0.5.
     """
     y_pred = np.zeros(len(X_test), dtype=int)
     y_proba = np.zeros(len(X_test))
@@ -169,8 +211,13 @@ def predict_hel(segment_models, X_test, test_segment_indices):
         if len(idx) == 0:
             continue
         X_seg = X_test.iloc[idx] if hasattr(X_test, "iloc") else X_test[idx]
-        y_pred[idx] = model.predict(X_seg)
-        y_proba[idx] = model.predict_proba(X_seg)[:, 1]
+        proba = model.predict_proba(X_seg)[:, 1]
+        if segment_thresholds is not None:
+            thr = segment_thresholds.get(seg_name, 0.5)
+        else:
+            thr = 0.5
+        y_pred[idx] = (proba >= thr).astype(int)
+        y_proba[idx] = proba
 
     return y_pred, y_proba
 

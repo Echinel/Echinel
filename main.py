@@ -11,6 +11,9 @@ Research Questions:
   RQ2: What differential feature importance patterns exist across segments?
   RQ3: What is the financial impact of the HEL framework?
 
+Data Source:
+  Lloyds Banking Group Job Simulation Task (Forage platform)
+
 Execution:
   python main.py
 
@@ -64,44 +67,198 @@ OUTPUTS_DIR = Path("outputs")
 np.random.seed(RANDOM_STATE)
 
 
+def _standardise_columns(demographics_df, transactions_df, service_df,
+                         online_df, churn_df):
+    """
+    Standardise column names from the Forage dataset to internal names
+    used by the feature engineering pipeline.
+
+    Forage schema -> Internal schema:
+      MaritalStatus -> Marital_Status
+      IncomeLevel -> Income_Level
+      AmountSpent -> Transaction_Amount
+      ProductCategory -> Transaction_Category
+      InteractionType -> Interaction_Type
+      ResolutionStatus -> Resolution_Status
+      ServiceUsage -> Service_Channel
+      ChurnStatus -> Churn
+      LastLoginDate -> Days_Since_Last_Login (derived)
+    """
+    # Demographics
+    demo_rename = {
+        "MaritalStatus": "Marital_Status",
+        "IncomeLevel": "Income_Level",
+    }
+    demographics_df = demographics_df.rename(
+        columns={k: v for k, v in demo_rename.items()
+                 if k in demographics_df.columns}
+    )
+
+    # Expand Gender abbreviations if present (M/F -> Male/Female)
+    if "Gender" in demographics_df.columns:
+        gender_map = {"M": "Male", "F": "Female"}
+        demographics_df["Gender"] = demographics_df["Gender"].map(
+            lambda x: gender_map.get(x, x)
+        )
+
+    # Transactions
+    tx_rename = {
+        "AmountSpent": "Transaction_Amount",
+        "ProductCategory": "Transaction_Category",
+    }
+    transactions_df = transactions_df.rename(
+        columns={k: v for k, v in tx_rename.items()
+                 if k in transactions_df.columns}
+    )
+    # Drop non-feature columns
+    for col in ["TransactionID", "TransactionDate"]:
+        if col in transactions_df.columns:
+            transactions_df = transactions_df.drop(columns=[col])
+
+    # Customer Service
+    svc_rename = {
+        "InteractionType": "Interaction_Type",
+        "ResolutionStatus": "Resolution_Status",
+    }
+    service_df = service_df.rename(
+        columns={k: v for k, v in svc_rename.items()
+                 if k in service_df.columns}
+    )
+    # Map "Feedback" to "Request" for consistency with feature engineering
+    if "Interaction_Type" in service_df.columns:
+        service_df["Interaction_Type"] = service_df[
+            "Interaction_Type"
+        ].replace({"Feedback": "Request"})
+    for col in ["InteractionID", "InteractionDate"]:
+        if col in service_df.columns:
+            service_df = service_df.drop(columns=[col])
+
+    # Online Activity
+    if online_df is not None:
+        # Derive Days_Since_Last_Login from LastLoginDate
+        if "LastLoginDate" in online_df.columns:
+            ref_date = pd.Timestamp("2024-01-01")
+            online_df["Days_Since_Last_Login"] = (
+                ref_date - pd.to_datetime(online_df["LastLoginDate"])
+            ).dt.days
+            online_df = online_df.drop(columns=["LastLoginDate"])
+
+        # Rename Forage column names to internal format
+        online_rename = {
+            "ServiceUsage": "Service_Channel",
+            "LoginFrequency": "Login_Frequency",
+        }
+        online_df = online_df.rename(
+            columns={k: v for k, v in online_rename.items()
+                     if k in online_df.columns}
+        )
+
+    # Churn Status
+    if churn_df is not None:
+        if "ChurnStatus" in churn_df.columns:
+            churn_df = churn_df.rename(columns={"ChurnStatus": "Churn"})
+
+    return demographics_df, transactions_df, service_df, online_df, churn_df
+
+
+def _find_sheet(sheet_names, candidates):
+    """Find a sheet name matching any of the candidate patterns."""
+    for name in sheet_names:
+        name_lower = name.lower().replace("_", "").replace(" ", "")
+        for candidate in candidates:
+            cand_lower = candidate.lower().replace("_", "").replace(" ", "")
+            if cand_lower in name_lower or name_lower in cand_lower:
+                return name
+    return None
+
+
 def load_or_generate_data():
     """Load real data if available, otherwise generate synthetic data."""
     FIGURES_DIR.mkdir(exist_ok=True)
     OUTPUTS_DIR.mkdir(exist_ok=True)
 
     if DATA_PATH.exists() and DATA_PATH.stat().st_size > 0:
-        print("Loading real dataset from Excel...")
+        print("Examining dataset from Excel...")
         try:
             xls = pd.ExcelFile(DATA_PATH)
             sheet_names = xls.sheet_names
             print(f"  Sheets found: {sheet_names}")
 
-            # Try to load from multi-sheet format
             if len(sheet_names) >= 3:
-                demographics_df = pd.read_excel(DATA_PATH,
-                                                sheet_name=sheet_names[0])
-                transactions_df = pd.read_excel(DATA_PATH,
-                                                sheet_name=sheet_names[1])
-                service_df = pd.read_excel(DATA_PATH,
-                                           sheet_name=sheet_names[2])
-                # Online activity may be separate or combined
-                if len(sheet_names) >= 4:
-                    online_df = pd.read_excel(DATA_PATH,
-                                              sheet_name=sheet_names[3])
-                else:
-                    online_df = None
-                if len(sheet_names) >= 5:
-                    churn_df = pd.read_excel(DATA_PATH,
-                                             sheet_name=sheet_names[4])
-                else:
-                    churn_df = None
+                # Map sheet names flexibly
+                demo_sheet = _find_sheet(
+                    sheet_names,
+                    ["Demographics", "Customer_Demographics"])
+                tx_sheet = _find_sheet(
+                    sheet_names,
+                    ["Transactions", "Transaction_History"])
+                svc_sheet = _find_sheet(
+                    sheet_names,
+                    ["Customer_Service", "Service"])
+                online_sheet = _find_sheet(
+                    sheet_names,
+                    ["Online_Activity", "Online"])
+                churn_sheet = _find_sheet(
+                    sheet_names,
+                    ["Churn_Status", "Churn"])
+
+                demographics_df = pd.read_excel(
+                    DATA_PATH, sheet_name=demo_sheet)
+                transactions_df = pd.read_excel(
+                    DATA_PATH, sheet_name=tx_sheet)
+                service_df = pd.read_excel(
+                    DATA_PATH, sheet_name=svc_sheet)
+                online_df = pd.read_excel(
+                    DATA_PATH,
+                    sheet_name=online_sheet) if online_sheet else None
+                churn_df = pd.read_excel(
+                    DATA_PATH,
+                    sheet_name=churn_sheet) if churn_sheet else None
 
                 print(f"  Loaded {len(sheet_names)} sheets successfully.")
+
+                # Standardise column names to internal format
+                demographics_df, transactions_df, service_df, \
+                    online_df, churn_df = _standardise_columns(
+                        demographics_df, transactions_df, service_df,
+                        online_df, churn_df
+                    )
+
+                # Print dataset summary statistics (Table 1)
+                print("\n  Dataset Summary (Table 1):")
+                print(f"    Demographics: {len(demographics_df)} records")
+                print(f"      Age: M={demographics_df['Age'].mean():.1f}, "
+                      f"SD={demographics_df['Age'].std():.1f}")
+                print(f"      Gender: "
+                      f"{demographics_df['Gender'].value_counts().to_dict()}")
+                print(f"    Transactions: {len(transactions_df)} records")
+                print(f"      Amount: "
+                      f"M=\u00a3{transactions_df['Transaction_Amount'].mean():.2f}")
+                print(f"    Service: {len(service_df)} records")
+                if "Interaction_Type" in service_df.columns:
+                    complaint_pct = 100 * (
+                        service_df["Interaction_Type"] == "Complaint"
+                    ).mean()
+                    print(f"      Complaints: {complaint_pct:.1f}%")
+                if "Resolution_Status" in service_df.columns:
+                    unresolved_pct = 100 * (
+                        service_df["Resolution_Status"] == "Unresolved"
+                    ).mean()
+                    print(f"      Unresolved: {unresolved_pct:.1f}%")
+                if online_df is not None:
+                    print(f"    Online Activity: {len(online_df)} records")
+                    print(f"      Login Frequency: "
+                          f"M={online_df['Login_Frequency'].mean():.1f}")
+                if churn_df is not None:
+                    n_churned = churn_df["Churn"].sum()
+                    n_total = len(churn_df)
+                    print(f"    Churn: {n_churned}/{n_total} "
+                          f"({100*n_churned/n_total:.1f}%)")
+
                 return demographics_df, transactions_df, service_df, \
                     online_df, churn_df
 
             else:
-                # Single sheet - try to load and parse
                 df = pd.read_excel(DATA_PATH)
                 print(f"  Single sheet with {len(df)} rows, "
                       f"{len(df.columns)} columns")
@@ -110,7 +267,7 @@ def load_or_generate_data():
 
         except Exception as e:
             print(f"  Error loading Excel: {e}")
-            print("  Falling back to synthetic data generation...")
+            print("  Falling back to data generation...")
 
     print("Generating synthetic dataset matching dissertation statistics...")
     return generate_dataset(seed=RANDOM_STATE, output_path=str(DATA_PATH))
@@ -118,21 +275,15 @@ def load_or_generate_data():
 
 def _parse_single_sheet(df):
     """Parse a single-sheet dataset into component DataFrames."""
-    # Attempt to identify columns and split into logical tables
-    cols_lower = {c: c.lower().replace(" ", "_") for c in df.columns}
-
-    # Try to identify CustomerID
     id_col = None
     for c in df.columns:
         if "customer" in c.lower() and "id" in c.lower():
             id_col = c
             break
     if id_col is None:
-        # Use first column or create one
         df.insert(0, "CustomerID", range(1, len(df) + 1))
         id_col = "CustomerID"
 
-    # Identify churn column
     churn_col = None
     for c in df.columns:
         if "churn" in c.lower() or "exit" in c.lower():
@@ -142,11 +293,9 @@ def _parse_single_sheet(df):
     if churn_col is None:
         raise ValueError("Cannot identify churn/target column in dataset")
 
-    # Create churn df
     churn_df = df[[id_col, churn_col]].copy()
     churn_df.columns = ["CustomerID", "Churn"]
 
-    # Demographics: age, gender, marital, income-like columns
     demo_cols = [id_col]
     for c in df.columns:
         cl = c.lower()
@@ -158,7 +307,6 @@ def _parse_single_sheet(df):
     demographics_df = df[demo_cols].copy()
     demographics_df = demographics_df.rename(columns={id_col: "CustomerID"})
 
-    # Transaction-like columns
     tx_cols = [id_col]
     for c in df.columns:
         cl = c.lower()
@@ -171,7 +319,6 @@ def _parse_single_sheet(df):
     transactions_df = df[tx_cols].copy()
     transactions_df = transactions_df.rename(columns={id_col: "CustomerID"})
 
-    # Service interaction columns
     svc_cols = [id_col]
     for c in df.columns:
         cl = c.lower()
@@ -184,7 +331,6 @@ def _parse_single_sheet(df):
     if service_df is not None:
         service_df = service_df.rename(columns={id_col: "CustomerID"})
 
-    # Online/digital columns
     online_cols = [id_col]
     for c in df.columns:
         cl = c.lower()
@@ -197,8 +343,6 @@ def _parse_single_sheet(df):
     if online_df is not None:
         online_df = online_df.rename(columns={id_col: "CustomerID"})
 
-    # Keep the full dataframe as fallback
-    # Store the original df for direct feature engineering
     demographics_df._full_df = df
 
     return demographics_df, transactions_df, service_df, online_df, churn_df
@@ -210,12 +354,10 @@ def engineer_features_flexible(demographics_df, transactions_df,
     Flexible feature engineering that handles both multi-table and
     single-table data formats.
     """
-    # Check if we have the full df attached (single-sheet case)
     if hasattr(demographics_df, "_full_df"):
         df = demographics_df._full_df.copy()
         print("  Using single-sheet format for feature engineering...")
 
-        # Identify and rename key columns
         col_map = {}
         for c in df.columns:
             cl = c.lower()
@@ -226,7 +368,6 @@ def engineer_features_flexible(demographics_df, transactions_df,
 
         df = df.rename(columns=col_map)
 
-        # Drop non-feature columns
         drop_cols = []
         for c in df.columns:
             cl = c.lower()
@@ -236,7 +377,6 @@ def engineer_features_flexible(demographics_df, transactions_df,
 
         df = df.drop(columns=drop_cols, errors="ignore")
 
-        # If no Total_Monetary_Value, try to create one
         if "Total_Monetary_Value" not in df.columns:
             for c in df.columns:
                 cl = c.lower()
@@ -247,13 +387,12 @@ def engineer_features_flexible(demographics_df, transactions_df,
                     if "Total_Monetary_Value" not in df.columns:
                         df["Total_Monetary_Value"] = df[c]
 
-        # Remove CustomerID for modelling
         if "CustomerID" in df.columns:
             df = df.drop(columns=["CustomerID"])
 
         return df
 
-    # Multi-table format (generated data)
+    # Multi-table format (Forage or generated data)
     return engineer_features(demographics_df, transactions_df,
                              service_df, online_df, churn_df)
 
@@ -309,7 +448,8 @@ def main():
     # Print key correlations
     numeric_features = df_features.select_dtypes(include=[np.number])
     if "Churn" in numeric_features.columns:
-        churn_corr = numeric_features.corr()["Churn"].drop("Churn").sort_values()
+        churn_corr = numeric_features.corr()["Churn"].drop(
+            "Churn").sort_values()
         print("\n  Key correlations with Churn:")
         for feat, corr_val in churn_corr.items():
             print(f"    {feat:35s} r = {corr_val:+.4f}")
@@ -346,7 +486,6 @@ def main():
     # Identify the monetary value column
     tmv_col = "Total_Monetary_Value"
     if tmv_col not in df_raw.columns:
-        # Find a suitable proxy
         for c in df_raw.columns:
             if "balance" in c.lower() or "monetary" in c.lower():
                 tmv_col = c
@@ -356,7 +495,7 @@ def main():
 
     print(f"  Using '{tmv_col}' for value segmentation")
     median_value = df_raw[tmv_col].median()
-    print(f"  Median value: £{median_value:,.2f}")
+    print(f"  Median value: \u00a3{median_value:,.2f}")
 
     # Create segment masks for train and test
     train_high_mask = df_raw_train[tmv_col] >= median_value
@@ -395,28 +534,33 @@ def main():
     # =========================================================
     print("\n[STEP 7] MONOLITHIC BASELINE TRAINING")
     print("-" * 40)
-    mono_model, mono_cv_results = train_monolithic_baseline(
+    mono_model, mono_cv_results, mono_threshold = train_monolithic_baseline(
         X_train, y_train, random_state=RANDOM_STATE, verbose=0
     )
 
-    # Monolithic predictions
-    mono_pred = mono_model.predict(X_test)
+    # Monolithic predictions using CV-selected Youden's J threshold
     mono_proba = mono_model.predict_proba(X_test)[:, 1]
+    mono_pred = (mono_proba >= mono_threshold).astype(int)
+    print(f"  Applied CV threshold: {mono_threshold:.4f}")
 
     # =========================================================
     # STEP 8: Train HEL Framework (Stage 2)
     # =========================================================
     print("\n[STEP 8] HEL FRAMEWORK TRAINING (Stage 2)")
     print("-" * 40)
-    segment_models, segment_cv_results = train_hel_framework(
-        X_train, y_train, segments_train,
-        random_state=RANDOM_STATE, verbose=0
+    segment_models, segment_cv_results, segment_thresholds = (
+        train_hel_framework(
+            X_train, y_train, segments_train,
+            random_state=RANDOM_STATE, verbose=0
+        )
     )
 
-    # HEL combined predictions
+    # HEL combined predictions using segment-specific thresholds
     hel_pred, hel_proba = predict_hel(
-        segment_models, X_test, test_segment_indices
+        segment_models, X_test, test_segment_indices,
+        segment_thresholds=segment_thresholds
     )
+    print(f"  Applied segment thresholds: {segment_thresholds}")
 
     # =========================================================
     # STEP 9: Evaluation (RQ1)
@@ -525,19 +669,19 @@ def main():
     print(f"  {'Metric':<40s} {'Monolithic':>15s} {'HEL':>15s}")
     print(f"  {'-'*70}")
     for key in ["EFL_Total", "FN_Cost_Lost_CLV",
-                "FP_Cost_Unnecessary_Intervention", "TP_Intervention_Cost",
+                "FP_Cost_Unnecessary_Intervention",
                 "N_False_Negatives", "N_False_Positives"]:
         mv = mono_efl[key]
         hv = hel_efl[key]
         if isinstance(mv, float):
-            print(f"  {key:<40s} £{mv:>14,.2f} £{hv:>14,.2f}")
+            print(f"  {key:<40s} \u00a3{mv:>14,.2f} \u00a3{hv:>14,.2f}")
         else:
             print(f"  {key:<40s} {mv:>15d} {hv:>15d}")
 
     efl_reduction = (mono_efl["EFL_Total"] - hel_efl["EFL_Total"])
     efl_pct = 100 * efl_reduction / mono_efl["EFL_Total"] \
         if mono_efl["EFL_Total"] > 0 else 0
-    print(f"\n  EFL Reduction: £{efl_reduction:,.2f} ({efl_pct:.1f}%)")
+    print(f"\n  EFL Reduction: \u00a3{efl_reduction:,.2f} ({efl_pct:.1f}%)")
 
     # Save financial results
     efl_df = pd.DataFrame([
@@ -629,8 +773,8 @@ def main():
     print(f"    Monolithic F1-Score: {mono_metrics['F1-Score']:.4f}")
     print(f"    HEL F1-Score:       {hel_metrics['F1-Score']:.4f}")
     f1_diff = hel_metrics['F1-Score'] - mono_metrics['F1-Score']
-    print(f"    Improvement:        {f1_diff:+.4f} "
-          f"({100*f1_diff/mono_metrics['F1-Score']:.1f}%)")
+    print(f"    Difference:         {f1_diff:+.4f} "
+          f"({100*f1_diff/mono_metrics['F1-Score']:+.1f}%)")
     print(f"    McNemar p-value:    {p_value:.4f} "
           f"({'Significant' if p_value < 0.05 else 'Not significant'} "
           f"at alpha=0.05)")
@@ -639,12 +783,13 @@ def main():
     for seg_name in ["high_value", "low_value"]:
         top3 = shap_results[seg_name]["importance"].head(3)
         features_str = ", ".join(top3["Feature"].values)
-        print(f"    {seg_name.replace('_', ' ').title()} top 3: {features_str}")
+        print(f"    {seg_name.replace('_', ' ').title()} "
+              f"top 3: {features_str}")
 
     print(f"\n  RQ3: Financial Impact")
-    print(f"    Monolithic EFL: £{mono_efl['EFL_Total']:,.2f}")
-    print(f"    HEL EFL:        £{hel_efl['EFL_Total']:,.2f}")
-    print(f"    Reduction:      £{efl_reduction:,.2f} ({efl_pct:.1f}%)")
+    print(f"    Monolithic EFL: \u00a3{mono_efl['EFL_Total']:,.2f}")
+    print(f"    HEL EFL:        \u00a3{hel_efl['EFL_Total']:,.2f}")
+    print(f"    Reduction:      \u00a3{efl_reduction:,.2f} ({efl_pct:.1f}%)")
 
     print(f"\n  Output files saved to:")
     print(f"    Figures: {FIGURES_DIR.absolute()}/")
@@ -656,6 +801,16 @@ def main():
     for seg_name, cv_res in segment_cv_results.items():
         cv_res.to_csv(OUTPUTS_DIR / f"cv_results_{seg_name}.csv",
                       index=False)
+
+    # Save CV-selected thresholds
+    thresholds_df = pd.DataFrame([
+        {"Model": "Monolithic Baseline", "CV_Youden_J_Threshold":
+         mono_threshold},
+        *[{"Model": f"HEL {s.replace('_', ' ').title()}",
+           "CV_Youden_J_Threshold": t}
+          for s, t in segment_thresholds.items()],
+    ])
+    thresholds_df.to_csv(OUTPUTS_DIR / "cv_thresholds.csv", index=False)
 
     # Save confidence interval results
     ci_rows = []
