@@ -1,23 +1,23 @@
 Feature,Mean_Abs_SHAP
-Login_Frequency,0.9715508
-Income_Level_High,0.9678607
-Gender_Female,0.95828956
-Marital_Status_Widowed,0.93975425
-Marital_Status_Divorced,0.8928547
-Service_Channel_Online Banking,0.79992557
-Avg_Transaction_Value,0.79290617
-Days_Since_Last_Login,0.75145054
-Age,0.70573753
-Income_Level_Medium,0.70364225
-Service_Channel_Mobile App,0.6393806
-Service_Channel_Website,0.602827
-Total_Interactions,0.6011887
-Total_Monetary_Value,0.5830709
-Marital_Status_Married,0.5820838
-Gender_Male,0.48349488
-Income_Level_Low,0.47151616
-Category_Diversity,0.4373465
-Transaction_Frequency,0.40991583
-Marital_Status_Single,0.40648964
-Unresolved_Complaint_Ratio,0.22767837
-Complaint_Count,0.21554685
+Gender_Female,1.1221117
+Login_Frequency,1.0277876
+Income_Level_High,0.99180156
+Marital_Status_Widowed,0.94115305
+Marital_Status_Divorced,0.83282375
+Service_Channel_Online Banking,0.76784265
+Avg_Transaction_Value,0.7373326
+Income_Level_Medium,0.70852894
+Days_Since_Last_Login,0.70346266
+Total_Interactions,0.67992216
+Age,0.67236775
+Service_Channel_Mobile App,0.6561198
+Total_Monetary_Value,0.6531225
+Gender_Male,0.61362237
+Service_Channel_Website,0.5843473
+Marital_Status_Married,0.5781318
+Marital_Status_Single,0.40056142
+Transaction_Frequency,0.38800713
+Income_Level_Low,0.3769487
+Category_Diversity,0.37500286
+Complaint_Count,0.16764463
+Unresolved_Complaint_Ratio,0.15084924

@@ -534,28 +534,33 @@ def main():
     # =========================================================
     print("\n[STEP 7] MONOLITHIC BASELINE TRAINING")
     print("-" * 40)
-    mono_model, mono_cv_results = train_monolithic_baseline(
+    mono_model, mono_cv_results, mono_threshold = train_monolithic_baseline(
         X_train, y_train, random_state=RANDOM_STATE, verbose=0
     )
 
-    # Monolithic predictions
-    mono_pred = mono_model.predict(X_test)
+    # Monolithic predictions using CV-selected Youden's J threshold
     mono_proba = mono_model.predict_proba(X_test)[:, 1]
+    mono_pred = (mono_proba >= mono_threshold).astype(int)
+    print(f"  Applied CV threshold: {mono_threshold:.4f}")
 
     # =========================================================
     # STEP 8: Train HEL Framework (Stage 2)
     # =========================================================
     print("\n[STEP 8] HEL FRAMEWORK TRAINING (Stage 2)")
     print("-" * 40)
-    segment_models, segment_cv_results = train_hel_framework(
-        X_train, y_train, segments_train,
-        random_state=RANDOM_STATE, verbose=0
+    segment_models, segment_cv_results, segment_thresholds = (
+        train_hel_framework(
+            X_train, y_train, segments_train,
+            random_state=RANDOM_STATE, verbose=0
+        )
     )
 
-    # HEL combined predictions
+    # HEL combined predictions using segment-specific thresholds
     hel_pred, hel_proba = predict_hel(
-        segment_models, X_test, test_segment_indices
+        segment_models, X_test, test_segment_indices,
+        segment_thresholds=segment_thresholds
     )
+    print(f"  Applied segment thresholds: {segment_thresholds}")
 
     # =========================================================
     # STEP 9: Evaluation (RQ1)
@@ -796,6 +801,16 @@ def main():
     for seg_name, cv_res in segment_cv_results.items():
         cv_res.to_csv(OUTPUTS_DIR / f"cv_results_{seg_name}.csv",
                       index=False)
+
+    # Save CV-selected thresholds
+    thresholds_df = pd.DataFrame([
+        {"Model": "Monolithic Baseline", "CV_Youden_J_Threshold":
+         mono_threshold},
+        *[{"Model": f"HEL {s.replace('_', ' ').title()}",
+           "CV_Youden_J_Threshold": t}
+          for s, t in segment_thresholds.items()],
+    ])
+    thresholds_df.to_csv(OUTPUTS_DIR / "cv_thresholds.csv", index=False)
 
     # Save confidence interval results
     ci_rows = []
